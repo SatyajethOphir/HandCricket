@@ -2,6 +2,7 @@
 //  sessions/gameManager.js  — XO-ARENA HAND CRICKET
 //  Supports: PvP 1v1, AI, Multiplayer (2–20 players / 2 teams)
 //  New: match cancel, team-name editing, host controls, bot fill
+//  GIF: situation-aware GIFs via gifEngine (Tenor API)
 // ============================================================
 
 const { HandCricketGame, STATE } = require('../games/handcricket');
@@ -14,8 +15,9 @@ const {
   buildInningsEndEmbed, buildResultEmbed,
 } = require('../utils/ui');
 const {
-  getSledge, getGif, getCrowdReaction, getMilestoneComment,
+  getSledge, getCrowdReaction, getMilestoneComment,
 } = require('../utils/flavor');
+const { getGifForEvent } = require('../utils/gifEngine');
 const {
   EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
   ModalBuilder, TextInputBuilder, TextInputStyle,
@@ -27,6 +29,34 @@ const multiSessions = new Map(); // channelId → MultiMatch
 const rematchConfigs= new Map();
 const timeouts      = new Map();
 const TIMEOUT_MS    = parseInt(process.env.SESSION_TIMEOUT_MS || '300000');
+
+// ── Per-channel wicket streak tracker (for collapse detection) ─
+const recentWickets = new Map(); // channelId → count
+
+function _recordWicket(channelId) {
+  recentWickets.set(channelId, (recentWickets.get(channelId) || 0) + 1);
+}
+function _resetWickets(channelId) {
+  recentWickets.set(channelId, 0);
+}
+function _getRecentWickets(channelId) {
+  return recentWickets.get(channelId) || 0;
+}
+
+
+// ── Safe reply helper ─────────────────────────────────────────
+// Handles cases where interaction may already be acknowledged
+async function safeReply(interaction, options) {
+  try {
+    if (interaction.replied || interaction.deferred) {
+      return await interaction.followUp(options);
+    }
+    return await interaction.reply(options);
+  } catch (err) {
+    if (err.code === 40060) return; // already acknowledged — silently ignore
+    throw err;
+  }
+}
 
 // ════════════════════════════════════════════════════════════
 //  BOT NAMES — used when filling empty slots
@@ -95,14 +125,14 @@ class MultiMatch {
   addPlayer(player) {
     if (this.joinedIds.has(player.id)) return 'already';
     if (this.isFull()) return 'full';
-    // Fill Team A first, then Team B
     if (this.teamA.players.length < this.teamSize) {
       this.teamA.players.push(player);
     } else {
       this.teamB.players.push(player);
     }
     this.joinedIds.add(player.id);
-    return 'ok';
+    // Send LOBBY_FULL gif when last slot is filled
+    return this.isFull() ? 'full_now' : 'ok';
   }
 
   fillWithBots() {
@@ -345,6 +375,52 @@ function buildMultiBatBowlButtons(channelId) {
 }
 
 // ════════════════════════════════════════════════════════════
+//  GIF HELPERS
+// ════════════════════════════════════════════════════════════
+
+/**
+ * Send a situation-aware GIF to a channel.
+ * Silently skips if no GIF is found or Tenor is unavailable.
+ *
+ * @param {TextChannel} channel
+ * @param {string}      event    - e.g. 'OUT', 'SIX', 'WIN'
+ * @param {object}      ctx      - extra context for smarter selection
+ */
+async function _sendGif(channel, event, ctx = {}) {
+  try {
+    const url = await getGifForEvent(event, ctx);
+    if (url) await channel.send({ content: url });
+  } catch (_) {
+    // Never crash the game over a failed GIF
+  }
+}
+
+/**
+ * Build pressure context for last-over / last-ball situations.
+ */
+function _pressureCtx(game) {
+  const ballsLeft = typeof game.ballsRemaining === 'function'
+    ? game.ballsRemaining()
+    : 0;
+  return {
+    isLastOver:        ballsLeft <= 6,
+    needRunsOnLastBall: ballsLeft === 1,
+  };
+}
+
+/**
+ * Build pressure context for multi-match.
+ */
+function _multiPressureCtx(m) {
+  const balls     = m.getCurrentBalls();
+  const ballsLeft = m.maxBalls - balls;
+  return {
+    isLastOver:        ballsLeft <= 6,
+    needRunsOnLastBall: ballsLeft === 1,
+  };
+}
+
+// ════════════════════════════════════════════════════════════
 //  PUBLIC API
 // ════════════════════════════════════════════════════════════
 
@@ -409,7 +485,6 @@ async function startMultiGame(interaction, teamSize, maxOvers) {
     embeds:     [buildLobbyEmbed(m)],
     components: buildLobbyButtons(channelId, true),
   });
-  // Save lobby message id via followup fetch
   const reply = await interaction.fetchReply();
   m.lobbyMessageId = reply.id;
 }
@@ -471,7 +546,6 @@ async function handleInteraction(interaction) {
   _resetTimeout(channelId, interaction.channel);
 
   switch (action) {
-    // Select menu — value is in interaction.values[0], NOT in the customId
     case 'difficulty': {
       const difficulty = interaction.isStringSelectMenu()
         ? interaction.values[0]
@@ -493,7 +567,6 @@ async function handleInteraction(interaction) {
 async function _handleMultiInteraction(interaction, action, channelId, userId, value) {
   const m = multiSessions.get(channelId);
 
-  // ── Cancel — any player can cancel; host always can ────────
   if (action === 'cancel') {
     return _handleMultiCancel(interaction, m, channelId, userId);
   }
@@ -539,6 +612,11 @@ async function _handleMultiJoin(interaction, m, userId) {
     embeds:     [buildLobbyEmbed(m)],
     components: buildLobbyButtons(m.channelId, userId === m.host.id),
   });
+
+  // Send a "lobby full" GIF when the last slot was just filled
+  if (result === 'full_now') {
+    await _sendGif(interaction.channel, 'LOBBY_FULL');
+  }
 }
 
 // ── Fill bots ─────────────────────────────────────────────────
@@ -606,11 +684,10 @@ async function _handleEditNamesModal(interaction, channelId) {
   m.teamB.name = newB;
 
   await interaction.reply({
-    content:    `✅ Team names updated! **${newA}** vs **${newB}**`,
-    ephemeral:  true,
+    content:   `✅ Team names updated! **${newA}** vs **${newB}**`,
+    ephemeral: true,
   });
 
-  // Refresh lobby embed in channel
   const channel = interaction.channel;
   try {
     const msg = await channel.messages.fetch(m.lobbyMessageId);
@@ -663,11 +740,13 @@ async function _handleMultiToss(interaction, m, userId, call) {
     embeds:     [],
     components: buildMultiBatBowlButtons(m.channelId),
   });
+
+  // Toss win GIF
+  await _sendGif(interaction.channel, 'TOSS');
 }
 
 // ── Bat/Bowl choice ───────────────────────────────────────────
 async function _handleMultiChoice(interaction, m, userId, choice, channelId) {
-  // Toss winner captain decides
   const winnerTeam = m.tossWinner === 'A' ? m.teamA : m.teamB;
   if (!winnerTeam.players.some(p => p.id === userId)) {
     return interaction.reply({ content: `⚠️ Only a player from **${winnerTeam.name}** (toss winner) can choose!`, ephemeral: true });
@@ -678,6 +757,7 @@ async function _handleMultiChoice(interaction, m, userId, choice, channelId) {
 
   m.battingTeam = choice === 'bat' ? m.tossWinner : (m.tossWinner === 'A' ? 'B' : 'A');
   m.state = 'INNINGS1';
+  _resetWickets(channelId);
 
   const battingName = m.battingTeam === 'A' ? m.teamA.name : m.teamB.name;
 
@@ -690,30 +770,32 @@ async function _handleMultiChoice(interaction, m, userId, choice, channelId) {
   });
   m.scorecardMsgId = msg?.id;
 
-  // Trigger bots if both batter and bowler are bots
+  // Innings start GIF
+  await _sendGif(interaction.channel, 'INNINGS_END', { innings: 0 });
+
   await _triggerMultiBots(interaction, m);
 }
 
 // ── Number move ───────────────────────────────────────────────
 async function _handleMultiMove(interaction, m, userId, number) {
   if (!['INNINGS1','INNINGS2'].includes(m.state)) {
-    return interaction.reply({ content: '⚠️ Game not in play!', ephemeral: true });
+    return safeReply(interaction, { content: '⚠️ Game not in play!', ephemeral: true });
   }
 
   const batter = m.getCurrentBatter();
   const bowler = m.getCurrentBowler();
 
   if (userId !== batter.id && userId !== bowler.id) {
-    return interaction.reply({ content: '⚠️ It\'s not your turn right now! You\'re spectating this ball.', ephemeral: true });
+    return safeReply(interaction, { content: '⚠️ It\'s not your turn right now! You\'re spectating this ball.', ephemeral: true });
   }
-
   if (userId === batter.id && m.pendingBatter !== null) {
-    return interaction.reply({ content: '⚠️ Already locked in! Waiting for the bowler...', ephemeral: true });
+    return safeReply(interaction, { content: '⚠️ Already locked in! Waiting for the bowler...', ephemeral: true });
   }
   if (userId === bowler.id && m.pendingBowler !== null) {
-    return interaction.reply({ content: '⚠️ Already bowled! Waiting for the batter...', ephemeral: true });
+    return safeReply(interaction, { content: '⚠️ Already bowled! Waiting for the batter...', ephemeral: true });
   }
 
+  // Acknowledge FIRST, then do all logic
   await interaction.deferUpdate();
 
   const result = m.registerMove(userId, number);
@@ -735,6 +817,13 @@ async function _resolveMultiBall(interaction, m, result) {
   const channel = interaction.channel;
   const batter  = m.getCurrentBatter();
   const bowler  = m.getCurrentBowler();
+
+  // Track wickets for collapse detection
+  if (isOut) {
+    _recordWicket(m.channelId);
+  } else {
+    _resetWickets(m.channelId);
+  }
 
   let flavor = '';
   if (isOut) flavor = '💥 **OUT!** ' + getSledge('OUT');
@@ -758,8 +847,28 @@ async function _resolveMultiBall(interaction, m, result) {
     await channel.send({ embeds: [ballEmbed] }).catch(() => {});
   }
 
-  if (isOut) await channel.send({ content: getGif('OUT') }).catch(() => {});
-  else if (runs === 6) await channel.send({ content: getGif('SIX') }).catch(() => {});
+  // ── Situation-aware GIF ──────────────────────────────────
+  if (isOut) {
+    await _sendGif(channel, 'OUT', {
+      recentWickets: _getRecentWickets(m.channelId),
+    });
+  } else if (runs === 6) {
+    await _sendGif(channel, 'SIX');
+  } else if (runs === 4) {
+    await _sendGif(channel, 'FOUR');
+  } else {
+    // Pressure GIF (last over / last ball) — 40% chance to not spam
+    const pressure = _multiPressureCtx(m);
+    if ((pressure.isLastOver || pressure.needRunsOnLastBall) && Math.random() < 0.4) {
+      await _sendGif(channel, 'PRESSURE', pressure);
+    }
+  }
+
+  // Milestone GIF
+  const score = m.getCurrentScore();
+  if (!isOut && (score === 50 || score === 100)) {
+    await _sendGif(channel, 'MILESTONE', { score });
+  }
 
   await _sleep(700);
 
@@ -794,8 +903,12 @@ async function _endMultiInnings1(interaction, m, channel) {
       .setTimestamp()],
   });
 
+  // Innings-switch GIF
+  await _sendGif(channel, 'INNINGS_END', { innings: 1 });
+
   await _sleep(1500);
   m.endInnings();
+  _resetWickets(m.channelId);
 
   const chasingName = m.battingTeam === 'A' ? m.teamA.name : m.teamB.name;
   const msg = await channel.send({
@@ -812,6 +925,7 @@ async function _endMultiInnings1(interaction, m, channel) {
 async function _endMultiMatch(interaction, m, channel) {
   multiSessions.delete(m.channelId);
   _clearTimeout(m.channelId);
+  recentWickets.delete(m.channelId);
 
   const r = m.getResult();
 
@@ -830,7 +944,16 @@ async function _endMultiMatch(interaction, m, channel) {
     )],
   });
 
-  if (!r.draw) await channel.send({ content: getGif('WIN') }).catch(() => {});
+  // Contextual win/draw GIF
+  if (r.draw) {
+    await _sendGif(channel, 'DRAW');
+  } else {
+    const winnerHasBots = r.winner.players.every(p => p.isBot);
+    await _sendGif(channel, 'WIN', {
+      winnerIsBot: winnerHasBots,
+      margin:      r.margin,
+    });
+  }
 }
 
 // ── Trigger bots automatically ────────────────────────────────
@@ -844,7 +967,6 @@ async function _triggerMultiBots(interaction, m) {
 
   await _sleep(800);
 
-  // If both are bots, simulate fully
   if (batter.isBot && bowler.isBot) {
     const bn  = batter.ai.decide('batting', m.getCurrentScore(), m.target, m.maxBalls - m.getCurrentBalls());
     const bwn = bowler.ai.decide('bowling', m.getCurrentScore(), m.target, m.maxBalls - m.getCurrentBalls());
@@ -858,7 +980,6 @@ async function _triggerMultiBots(interaction, m) {
     return;
   }
 
-  // Only one bot — register its move
   if (batter.isBot && m.pendingBatter === null) {
     const bn = batter.ai.decide('batting', m.getCurrentScore(), m.target, m.maxBalls - m.getCurrentBalls());
     const result = m.registerMove(batter.id, bn);
@@ -881,7 +1002,6 @@ async function _handleMultiCancel(interaction, m, channelId, userId) {
     return;
   }
 
-  // Host or any player can cancel; non-players cannot
   const isHost   = userId === m.host.id;
   const isPlayer = m.joinedIds.has(userId);
 
@@ -891,6 +1011,7 @@ async function _handleMultiCancel(interaction, m, channelId, userId) {
 
   multiSessions.delete(channelId);
   _clearTimeout(channelId);
+  recentWickets.delete(channelId);
 
   const cancellerName = interaction.user.displayName || interaction.user.username;
 
@@ -904,7 +1025,7 @@ async function _handleMultiCancel(interaction, m, channelId, userId) {
 }
 
 // ════════════════════════════════════════════════════════════
-//  1v1 / AI HANDLERS (existing, with cancel added)
+//  1v1 / AI HANDLERS
 // ════════════════════════════════════════════════════════════
 
 async function _handleCancel1v1(interaction, channelId, userId) {
@@ -915,13 +1036,13 @@ async function _handleCancel1v1(interaction, channelId, userId) {
     return;
   }
 
-  // Only the two players can cancel
   if (userId !== game.player1.id && userId !== game.player2.id) {
     return interaction.reply({ content: '⚠️ Only the players in this match can cancel it!', ephemeral: true });
   }
 
   sessions.delete(channelId);
   _clearTimeout(channelId);
+  recentWickets.delete(channelId);
 
   const cancellerName = interaction.user.displayName || interaction.user.username;
 
@@ -978,6 +1099,9 @@ async function _handleToss(interaction, game, call) {
       components: _addCancelButton(buildNumberButtons(game.id), game.id),
     });
 
+    // Toss GIF
+    await _sendGif(interaction.channel, 'TOSS');
+
     if (game.isBatterAI()) await _triggerAIMove(interaction, game);
     return;
   }
@@ -986,6 +1110,9 @@ async function _handleToss(interaction, game, call) {
     embeds:     [tossEmbed],
     components: buildBatBowlButtons(game.id),
   });
+
+  // Toss win GIF
+  await _sendGif(interaction.channel, 'TOSS');
 }
 
 async function _handleBatBowlChoice(interaction, game, choice) {
@@ -997,6 +1124,7 @@ async function _handleBatBowlChoice(interaction, game, choice) {
   }
 
   game.assignBatBowl(interaction.user.id, choice);
+  _resetWickets(game.id);
 
   const choiceText = choice === 'bat'
     ? `🏏 **${interaction.user.username}** chose to bat first!`
@@ -1008,35 +1136,39 @@ async function _handleBatBowlChoice(interaction, game, choice) {
     components: _addCancelButton(buildNumberButtons(game.id), game.id),
   });
 
+  // Match start GIF
+  await _sendGif(interaction.channel, 'INNINGS_END', { innings: 0 });
+
   if (game.isBatterAI()) await _triggerAIMove(interaction, game);
 }
+
 
 async function _handleMove(interaction, game, number) {
   const userId = interaction.user.id;
 
   if (![STATE.INNINGS1, STATE.INNINGS2].includes(game.state)) {
-    return interaction.reply({ content: '⚠️ Game is not in play!', ephemeral: true });
+    return safeReply(interaction, { content: '⚠️ Game is not in play!', ephemeral: true });
   }
   if (number < 1 || number > 6) {
-    return interaction.reply({ content: '⚠️ Pick a number between 1 and 6!', ephemeral: true });
+    return safeReply(interaction, { content: '⚠️ Pick a number between 1 and 6!', ephemeral: true });
   }
 
   const batter = game.getBatter();
   const bowler = game.getBowler();
 
   if (userId !== batter.id && userId !== bowler.id) {
-    return interaction.reply({ content: '⚠️ It\'s not your turn! You\'re a spectator this ball.', ephemeral: true });
+    return safeReply(interaction, { content: '⚠️ It\'s not your turn! You\'re a spectator this ball.', ephemeral: true });
   }
   if (userId === batter.id && game.pendingBatter !== null) {
-    return interaction.reply({ content: '⚠️ You\'ve already picked for this ball! Waiting for opponent...', ephemeral: true });
+    return safeReply(interaction, { content: '⚠️ You\'ve already picked for this ball! Waiting for opponent...', ephemeral: true });
   }
   if (userId === bowler.id && game.pendingBowler !== null) {
-    return interaction.reply({ content: '⚠️ You\'ve already bowled! Waiting for batter...', ephemeral: true });
+    return safeReply(interaction, { content: '⚠️ You\'ve already bowled! Waiting for batter...', ephemeral: true });
   }
 
+  // Acknowledge FIRST
   await interaction.deferUpdate();
 
-  // ── Tell AI what the human just played (for hard difficulty tracking) ──
   if (game.mode === 'ai' && game.ai) {
     game.ai.recordPlayerMove(number);
   }
@@ -1044,13 +1176,10 @@ async function _handleMove(interaction, game, number) {
   const result = game.registerMove(userId, number);
 
   if (result === null) {
-    // Human move stored — if the opponent is the AI, trigger it now so the
-    // ball resolves immediately instead of hanging on "Waiting for CricketBot"
     if (game.mode === 'ai' && (game.isBatterAI() || game.isBowlerAI())) {
       await _triggerAIMove(interaction, game);
       return;
     }
-    // PvP — just tell the human we got their move
     const who = userId === batter.id ? bowler.username : batter.username;
     await interaction.followUp({
       content: `✅ Move locked in! Waiting for **${who}**...`,
@@ -1068,6 +1197,13 @@ async function _resolveBallResult(interaction, game, result) {
   const bowler  = game.getBowler();
   const channel = interaction.channel;
 
+  // Track wickets for collapse detection
+  if (isOut) {
+    _recordWicket(game.id);
+  } else {
+    _resetWickets(game.id);
+  }
+
   let flavor = '';
   if (isOut) flavor = getSledge('OUT');
   else if (runs === 6) flavor = getSledge('SIX');
@@ -1077,7 +1213,6 @@ async function _resolveBallResult(interaction, game, result) {
   if (milestone && !isOut) flavor += `\n${milestone}`;
 
   const ballEmbed = buildBallResultEmbed(game, batter, bowler, batterNum, bowlerNum, runs, isOut, flavor);
-  const gifUrl    = isOut ? getGif('OUT') : (runs === 6 ? getGif('SIX') : null);
 
   try {
     await interaction.editReply({ embeds: [ballEmbed], components: [] });
@@ -1085,7 +1220,27 @@ async function _resolveBallResult(interaction, game, result) {
     await channel.send({ embeds: [ballEmbed] }).catch(() => {});
   }
 
-  if (gifUrl) await channel.send({ content: gifUrl }).catch(() => {});
+  // ── Situation-aware GIF ──────────────────────────────────
+  if (isOut) {
+    await _sendGif(channel, 'OUT', {
+      recentWickets: _getRecentWickets(game.id),
+    });
+  } else if (runs === 6) {
+    await _sendGif(channel, 'SIX');
+  } else if (runs === 4) {
+    await _sendGif(channel, 'FOUR');
+  } else {
+    const pressure = _pressureCtx(game);
+    if ((pressure.isLastOver || pressure.needRunsOnLastBall) && Math.random() < 0.4) {
+      await _sendGif(channel, 'PRESSURE', pressure);
+    }
+  }
+
+  // Milestone GIF
+  const score = game.getCurrentScore();
+  if (!isOut && (score === 50 || score === 100)) {
+    await _sendGif(channel, 'MILESTONE', { score });
+  }
 
   await _sleep(600);
 
@@ -1116,8 +1271,12 @@ async function _endInnings1(interaction, game, channel) {
   const inningsEmbed = buildInningsEndEmbed(game, score, batter);
   await channel.send({ embeds: [inningsEmbed] });
 
+  // Innings switch GIF
+  await _sendGif(channel, 'INNINGS_END', { innings: 1 });
+
   await _sleep(1500);
   game.endInnings1();
+  _resetWickets(game.id);
 
   const scoreEmbed = buildScorecardEmbed(game);
   const msg = await channel.send({
@@ -1136,6 +1295,7 @@ async function _endMatch(interaction, game, channel) {
   const result = game.getResult();
   sessions.delete(game.id);
   _clearTimeout(game.id);
+  recentWickets.delete(game.id);
 
   rematchConfigs.set(game.id, game.toRematchConfig());
 
@@ -1161,7 +1321,6 @@ async function _endMatch(interaction, game, channel) {
     else if (result.winner?.id === game.player1.id) aiComment = '\n😤 *The AI demands a rematch.*';
   }
 
-  const winGif      = result.winner ? getGif('WIN') : null;
   const resultEmbed = buildResultEmbed(
     game,
     result.winner,
@@ -1177,7 +1336,15 @@ async function _endMatch(interaction, game, channel) {
     components: buildPostGameButtons(game.id),
   });
 
-  if (winGif) await channel.send({ content: winGif }).catch(() => {});
+  // Contextual end-of-match GIF
+  if (result.draw) {
+    await _sendGif(channel, 'DRAW');
+  } else {
+    await _sendGif(channel, 'WIN', {
+      winnerIsBot: result.winner?.id === 'AI_BOT',
+      margin:      result.margin || 0,
+    });
+  }
 }
 
 async function _triggerAIMove(interaction, game) {
@@ -1188,8 +1355,6 @@ async function _triggerAIMove(interaction, game) {
   const aiScore   = game.getBatter().id === 'AI_BOT' ? game.getCurrentScore() : 0;
   const ballsLeft = game.ballsRemaining();
 
-  // Use channel.send for the "thinking" indicator so we don't rely on the
-  // original interaction token (which expires after 15 s and causes failures)
   const channel = interaction.channel;
 
   await game.ai.thinkDelay();
@@ -1198,8 +1363,6 @@ async function _triggerAIMove(interaction, game) {
   const result   = game.registerAIMove(aiNumber);
 
   if (result === null) {
-    // AI move stored but human hasn't played yet (AI bats first, human bowls)
-    // Send a prompt so the human knows it's their turn to bowl
     await channel.send({
       embeds:     [buildScorecardEmbed(game)],
       components: _addCancelButton(buildNumberButtons(game.id, false), game.id),
@@ -1207,15 +1370,16 @@ async function _triggerAIMove(interaction, game) {
     return;
   }
 
-  // Both moves in — resolve the ball using channel instead of stale interaction
   await _resolveBallResultOnChannel(channel, game, result);
 }
 
-// ── Channel-based ball resolution (used when interaction token may be stale) ─
 async function _resolveBallResultOnChannel(channel, game, result) {
   const { batterNum, bowlerNum, runs, isOut, inningsOver, innings2Won } = result;
   const batter = game.getBatter();
   const bowler = game.getBowler();
+
+  if (isOut) _recordWicket(game.id);
+  else _resetWickets(game.id);
 
   let flavor = '';
   if (isOut) flavor = getSledge('OUT');
@@ -1226,15 +1390,34 @@ async function _resolveBallResultOnChannel(channel, game, result) {
   if (milestone && !isOut) flavor += `\n${milestone}`;
 
   const ballEmbed = buildBallResultEmbed(game, batter, bowler, batterNum, bowlerNum, runs, isOut, flavor);
-  const gifUrl    = isOut ? getGif('OUT') : (runs === 6 ? getGif('SIX') : null);
 
   await channel.send({ embeds: [ballEmbed] }).catch(() => {});
-  if (gifUrl) await channel.send({ content: gifUrl }).catch(() => {});
+
+  // ── Situation-aware GIF ──────────────────────────────────
+  if (isOut) {
+    await _sendGif(channel, 'OUT', {
+      recentWickets: _getRecentWickets(game.id),
+    });
+  } else if (runs === 6) {
+    await _sendGif(channel, 'SIX');
+  } else if (runs === 4) {
+    await _sendGif(channel, 'FOUR');
+  } else {
+    const pressure = _pressureCtx(game);
+    if ((pressure.isLastOver || pressure.needRunsOnLastBall) && Math.random() < 0.4) {
+      await _sendGif(channel, 'PRESSURE', pressure);
+    }
+  }
+
+  // Milestone GIF
+  const score = game.getCurrentScore();
+  if (!isOut && (score === 50 || score === 100)) {
+    await _sendGif(channel, 'MILESTONE', { score });
+  }
 
   await _sleep(600);
 
   if (inningsOver) {
-    // Need a fake interaction-like object for _endMatch/_endInnings1
     const fakeInteraction = { channel, editReply: async () => {}, followUp: async () => {} };
     if (innings2Won || game.innings === 2) {
       await _endMatch(fakeInteraction, game, channel);
@@ -1286,7 +1469,6 @@ async function _handleRematch(interaction, channelId, userId) {
 
 // ── Helpers ────────────────────────────────────────────────────
 
-// Appends a Cancel button row to existing button rows
 function _addCancelButton(rows, channelId) {
   const cancelRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -1303,7 +1485,10 @@ function _resetTimeout(channelId, channel) {
   const handle = setTimeout(async () => {
     sessions.delete(channelId);
     multiSessions.delete(channelId);
+    recentWickets.delete(channelId);
     try {
+      // Send a timeout GIF before the message
+      await _sendGif(channel, 'TIMEOUT');
       await channel.send('⏰ **Game timed out** due to inactivity. Use `/handcricket` to start a new match!');
     } catch (_) {}
   }, TIMEOUT_MS);
