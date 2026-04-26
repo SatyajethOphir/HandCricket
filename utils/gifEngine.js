@@ -3,8 +3,9 @@
 //  Uses Tenor API v2 to fetch contextual cricket GIFs
 // ============================================================
 
-const TENOR_API_KEY = process.env.TENOR_API_KEY;
-const TENOR_BASE    = 'https://tenor.googleapis.com/v2/search';
+const GIPHY_API_KEY = process.env.GIPHY_API_KEY;
+const GIPHY_BASE    = 'https://api.giphy.com/v1/gifs/search';
+
 
 // ── Situation → search query pools ───────────────────────────
 // Multiple queries per situation so it doesn't repeat the same GIF
@@ -119,26 +120,31 @@ const usedGifs = new Map();   // situation → Set of used indices
 /**
  * Fetch GIFs for a query from Tenor, with caching.
  */
+// Replace _fetchGifs function
 async function _fetchGifs(query, limit = 8) {
   if (gifCache.has(query)) return gifCache.get(query);
 
-  if (!TENOR_API_KEY) {
-    console.warn('[gifEngine] TENOR_API_KEY not set — skipping GIF fetch');
+  if (!GIPHY_API_KEY) {
+    console.warn('[gifEngine] GIPHY_API_KEY not set — skipping GIF fetch');
     return [];
   }
 
   try {
-    const url = `${TENOR_BASE}?q=${encodeURIComponent(query)}&key=${TENOR_API_KEY}&limit=${limit}&contentfilter=medium&media_filter=gif`;
+    const url = `${GIPHY_BASE}?q=${encodeURIComponent(query)}&api_key=${GIPHY_API_KEY}&limit=${limit}&rating=pg`;
     const res  = await fetch(url);
-    if (!res.ok) throw new Error(`Tenor HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`Giphy HTTP ${res.status}`);
     const data = await res.json();
-    const urls = (data.results || []).map(r => r.media_formats?.gif?.url).filter(Boolean);
+
+    // Giphy returns data.data[] with images.original.url
+    const urls = (data.data || [])
+      .map(g => g.images?.original?.url)
+      .filter(Boolean);
+
     gifCache.set(query, urls);
-    // Expire cache after 30 minutes
     setTimeout(() => gifCache.delete(query), 30 * 60 * 1000);
     return urls;
   } catch (err) {
-    console.error('[gifEngine] Tenor fetch error:', err.message);
+    console.error('[gifEngine] Giphy fetch error:', err.message);
     return [];
   }
 }
