@@ -21,15 +21,10 @@ const {
   buildResultEmbed,
 } = require("../utils/ui");
 const {
-<<<<<<< HEAD
   getSledge,
   getCrowdReaction,
   getMilestoneComment,
 } = require("../utils/flavor");
-=======
-  getSledge, getCrowdReaction, getMilestoneComment,
-} = require('../utils/flavor');
->>>>>>> 7369ed8 (after removing the guild glitches)
 const {
   EmbedBuilder,
   ActionRowBuilder,
@@ -78,9 +73,9 @@ async function safeReply(interaction, options) {
 async function safeChannelSend(channel, options) {
   if (!channel) return null;
   try {
-    return await safeChannelSend(channel, options);
+    return await channel.send(options);
   } catch (err) {
-    console.error('⚠️ safeChannelSend failed:', err.message);
+    console.error("⚠️ safeChannelSend failed:", err.message);
     return null;
   }
 }
@@ -115,7 +110,6 @@ function makeBotPlayer(index) {
 // ════════════════════════════════════════════════════════════
 class MultiMatch {
   constructor(channelId, host, teamSize, maxOvers) {
-<<<<<<< HEAD
     this.channelId = channelId;
     this.host = host;
     this.teamSize = teamSize;
@@ -136,28 +130,6 @@ class MultiMatch {
     this.battingTeam = null;
     this.tossWinner = null;
     this.batterIndex = 0;
-=======
-    this.channelId   = channelId;
-    this.host        = host;
-    this.teamSize    = teamSize;
-    this.maxOvers    = maxOvers || 5;
-    this.teamA       = { name: 'Team A', players: [host] };
-    this.teamB       = { name: 'Team B', players: [] };
-    this.state       = 'LOBBY';
-    this.joinedIds   = new Set([host.id]);
-
-    this.innings       = 1;
-    this.scoreA        = 0;
-    this.scoreB        = 0;
-    this.ballsA        = 0;
-    this.ballsB        = 0;
-    this.wicketsA      = 0;
-    this.wicketsB      = 0;
-    this.target        = null;
-    this.battingTeam   = null;
-    this.tossWinner    = null;
-    this.batterIndex   = 0;
->>>>>>> 7369ed8 (after removing the guild glitches)
     this.pendingBatter = null;
     this.pendingBowler = null;
     this.bowlerIndex = 0;
@@ -195,11 +167,7 @@ class MultiMatch {
       this.teamB.players.push(player);
     }
     this.joinedIds.add(player.id);
-<<<<<<< HEAD
     return this.isFull() ? "full_now" : "ok";
-=======
-    return this.isFull() ? 'full_now' : 'ok';
->>>>>>> 7369ed8 (after removing the guild glitches)
   }
 
   fillWithBots() {
@@ -443,19 +411,11 @@ function buildLobbyButtons(channelId, isHost) {
 }
 
 function buildMultiScorecardEmbed(m) {
-<<<<<<< HEAD
   const batter = m.getCurrentBatter();
   const bowler = m.getCurrentBowler();
   const battingTeamName = m.battingTeam === "A" ? m.teamA.name : m.teamB.name;
   const score = m.getCurrentScore();
   const balls = m.getCurrentBalls();
-=======
-  const batter  = m.getCurrentBatter();
-  const bowler  = m.getCurrentBowler();
-  const battingTeamName  = m.battingTeam === 'A' ? m.teamA.name : m.teamB.name;
-  const score   = m.getCurrentScore();
-  const balls   = m.getCurrentBalls();
->>>>>>> 7369ed8 (after removing the guild glitches)
   const wickets = m.getCurrentWickets();
   const overs = `${Math.floor(balls / 6)}.${balls % 6}`;
 
@@ -549,7 +509,6 @@ function buildMultiTossButtons(channelId) {
 }
 
 function buildMultiBatBowlButtons(channelId) {
-<<<<<<< HEAD
   return [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -564,12 +523,6 @@ function buildMultiBatBowlButtons(channelId) {
         .setEmoji("🎳"),
     ),
   ];
-=======
-  return [new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`hcm_choice_${channelId}_bat`).setLabel('Bat First').setStyle(ButtonStyle.Primary).setEmoji('🏏'),
-    new ButtonBuilder().setCustomId(`hcm_choice_${channelId}_bowl`).setLabel('Bowl First').setStyle(ButtonStyle.Success).setEmoji('🎳'),
-  )];
->>>>>>> 7369ed8 (after removing the guild glitches)
 }
 
 // ════════════════════════════════════════════════════════════
@@ -666,13 +619,8 @@ async function handleInteraction(interaction) {
     return;
   }
 
-<<<<<<< HEAD
   if (customId.startsWith("hcm_")) {
     const parts = customId.split("_");
-=======
-  if (customId.startsWith('hcm_')) {
-    const parts  = customId.split('_');
->>>>>>> 7369ed8 (after removing the guild glitches)
     const action = parts[1];
     const cid = parts[2];
     const value = parts[3];
@@ -692,11 +640,7 @@ async function handleInteraction(interaction) {
     );
   }
 
-<<<<<<< HEAD
   if (!customId.startsWith("hc_")) return;
-=======
-  if (!customId.startsWith('hc_')) return;
->>>>>>> 7369ed8 (after removing the guild glitches)
 
   const parts = customId.split("_");
   const action = parts[1];
@@ -1116,11 +1060,7 @@ async function _resolveMultiBall(interaction, m, result) {
   try {
     await interaction.editReply({ embeds: [ballEmbed], components: [] });
   } catch (_) {
-<<<<<<< HEAD
-    await channel.send({ embeds: [ballEmbed] }).catch(() => {});
-=======
     await safeChannelSend(channel, { embeds: [ballEmbed] }).catch(() => {});
->>>>>>> 7369ed8 (after removing the guild glitches)
   }
 
   await _sleep(700);
@@ -1134,16 +1074,11 @@ async function _resolveMultiBall(interaction, m, result) {
     return;
   }
 
-<<<<<<< HEAD
-  const scoreMsg = await channel.send({
-    embeds: [buildMultiScorecardEmbed(m)],
-=======
   const scoreMsg = await safeChannelSend(channel, {
-    embeds:     [buildMultiScorecardEmbed(m)],
->>>>>>> 7369ed8 (after removing the guild glitches)
+    embeds: [buildMultiScorecardEmbed(m)],
     components: buildMultiNumberButtons(m.channelId),
   });
-  m.scorecardMsgId = scoreMsg.id;
+  m.scorecardMsgId = scoreMsg?.id;
 
   await _triggerMultiBots(interaction, m);
 }
@@ -1153,8 +1088,7 @@ async function _endMultiInnings1(interaction, m, channel) {
   const score = m.getCurrentScore();
   const battingName = m.battingTeam === "A" ? m.teamA.name : m.teamB.name;
 
-<<<<<<< HEAD
-  await channel.send({
+  await safeChannelSend(channel, {
     embeds: [
       new EmbedBuilder()
         .setColor(0x1a73e8)
@@ -1164,34 +1098,19 @@ async function _endMultiInnings1(interaction, m, channel) {
         )
         .setTimestamp(),
     ],
-=======
-  await safeChannelSend(channel, {
-    embeds: [new EmbedBuilder()
-      .setColor(0x1a73e8)
-      .setTitle('🏏 End of Innings 1')
-      .setDescription(`**${battingName}** scored **${score}** runs!\n\nSwitching sides...`)
-      .setTimestamp()],
->>>>>>> 7369ed8 (after removing the guild glitches)
   });
 
   await _sleep(1500);
   m.endInnings();
   _resetWickets(m.channelId);
 
-<<<<<<< HEAD
   const chasingName = m.battingTeam === "A" ? m.teamA.name : m.teamB.name;
-  const msg = await channel.send({
+  const msg = await safeChannelSend(channel, {
     content: `🎯 **Innings 2 begins!** ${chasingName} needs **${m.target}** runs to win!`,
     embeds: [buildMultiScorecardEmbed(m)],
-=======
-  const chasingName = m.battingTeam === 'A' ? m.teamA.name : m.teamB.name;
-  const msg = await safeChannelSend(channel, {
-    content:    `🎯 **Innings 2 begins!** ${chasingName} needs **${m.target}** runs to win!`,
-    embeds:     [buildMultiScorecardEmbed(m)],
->>>>>>> 7369ed8 (after removing the guild glitches)
     components: buildMultiNumberButtons(m.channelId),
   });
-  m.scorecardMsgId = msg.id;
+  m.scorecardMsgId = msg?.id;
 
   await _triggerMultiBots(interaction, m);
 }
@@ -1204,7 +1123,6 @@ async function _endMultiMatch(interaction, m, channel) {
 
   const r = m.getResult();
 
-<<<<<<< HEAD
   m.teamA.players
     .filter((p) => !p.isBot)
     .forEach((p) => {
@@ -1222,7 +1140,7 @@ async function _endMultiMatch(interaction, m, channel) {
       });
     });
 
-  await channel.send({
+  await safeChannelSend(channel, {
     embeds: [buildMultiResultEmbed(m)],
     components: [
       new ActionRowBuilder().addComponents(
@@ -1232,20 +1150,6 @@ async function _endMultiMatch(interaction, m, channel) {
           .setStyle(ButtonStyle.Secondary),
       ),
     ],
-=======
-  m.teamA.players.filter(p => !p.isBot).forEach(p => {
-    updateStats(p.id, { won: !r.draw && r.winner.name === m.teamA.name, runsScored: m.scoreA });
-  });
-  m.teamB.players.filter(p => !p.isBot).forEach(p => {
-    updateStats(p.id, { won: !r.draw && r.winner.name === m.teamB.name, runsScored: m.scoreB });
-  });
-
-  await safeChannelSend(channel, {
-    embeds:     [buildMultiResultEmbed(m)],
-    components: [new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`hcm_cancel_${m.channelId}`).setLabel('Close').setStyle(ButtonStyle.Secondary),
-    )],
->>>>>>> 7369ed8 (after removing the guild glitches)
   });
 }
 
@@ -1578,11 +1482,7 @@ async function _resolveBallResult(interaction, game, result) {
   try {
     await interaction.editReply({ embeds: [ballEmbed], components: [] });
   } catch (_) {
-<<<<<<< HEAD
-    await channel.send({ embeds: [ballEmbed] }).catch(() => {});
-=======
     await safeChannelSend(channel, { embeds: [ballEmbed] }).catch(() => {});
->>>>>>> 7369ed8 (after removing the guild glitches)
   }
 
   await _sleep(600);
@@ -1597,16 +1497,11 @@ async function _resolveBallResult(interaction, game, result) {
   }
 
   const scoreEmbed = buildScorecardEmbed(game);
-<<<<<<< HEAD
-  const msg = await channel.send({
-    embeds: [scoreEmbed],
-=======
   const msg = await safeChannelSend(channel, {
-    embeds:     [scoreEmbed],
->>>>>>> 7369ed8 (after removing the guild glitches)
+    embeds: [scoreEmbed],
     components: _addCancelButton(buildNumberButtons(game.id, false), game.id),
   });
-  game.scorecardMessageId = msg.id;
+  game.scorecardMessageId = msg?.id;
 
   if (game.mode === "ai" && (game.isBatterAI() || game.isBowlerAI())) {
     await _triggerAIMove(interaction, game);
@@ -1617,29 +1512,19 @@ async function _endInnings1(interaction, game, channel) {
   const score = game.getCurrentScore();
   const batter = game.getBatter();
   const inningsEmbed = buildInningsEndEmbed(game, score, batter);
-<<<<<<< HEAD
-  await channel.send({ embeds: [inningsEmbed] });
-=======
   await safeChannelSend(channel, { embeds: [inningsEmbed] });
->>>>>>> 7369ed8 (after removing the guild glitches)
 
   await _sleep(1500);
   game.endInnings1();
   _resetWickets(game.id);
 
   const scoreEmbed = buildScorecardEmbed(game);
-<<<<<<< HEAD
-  const msg = await channel.send({
+  const msg = await safeChannelSend(channel, {
     content: `🏏 **INNINGS 2 BEGINS!** ${game.getBatter().username} needs to chase ${score + 1} runs!`,
     embeds: [scoreEmbed],
-=======
-  const msg = await safeChannelSend(channel, {
-    content:    `🏏 **INNINGS 2 BEGINS!** ${game.getBatter().username} needs to chase ${score + 1} runs!`,
-    embeds:     [scoreEmbed],
->>>>>>> 7369ed8 (after removing the guild glitches)
     components: _addCancelButton(buildNumberButtons(game.id, false), game.id),
   });
-  game.scorecardMessageId = msg.id;
+  game.scorecardMessageId = msg?.id;
 
   if (game.mode === "ai" && (game.isBatterAI() || game.isBowlerAI())) {
     await _triggerAIMove(interaction, game);
@@ -1687,15 +1572,9 @@ async function _endMatch(interaction, game, channel) {
     result.margin,
   );
 
-<<<<<<< HEAD
-  await channel.send({
+  await safeChannelSend(channel, {
     content: aiComment || undefined,
     embeds: [resultEmbed],
-=======
-  await safeChannelSend(channel, {
-    content:    aiComment || undefined,
-    embeds:     [resultEmbed],
->>>>>>> 7369ed8 (after removing the guild glitches)
     components: buildPostGameButtons(game.id),
   });
 }
@@ -1705,7 +1584,8 @@ async function _triggerAIMove(interaction, game) {
   if (![STATE.INNINGS1, STATE.INNINGS2].includes(game.state)) return;
 
   const role = game.isBatterAI() ? "batting" : "bowling";
-  const aiScore = game.getBatter().id === "AI_BOT" ? game.getCurrentScore() : 0;
+  const aiScore =
+    game.getBatter().id === "AI_BOT" ? game.getCurrentScore() : 0;
   const ballsLeft = game.ballsRemaining();
 
   const channel = interaction.channel;
@@ -1716,22 +1596,10 @@ async function _triggerAIMove(interaction, game) {
   const result = game.registerAIMove(aiNumber);
 
   if (result === null) {
-<<<<<<< HEAD
-    await channel
-      .send({
-        embeds: [buildScorecardEmbed(game)],
-        components: _addCancelButton(
-          buildNumberButtons(game.id, false),
-          game.id,
-        ),
-      })
-      .catch(() => {});
-=======
     await safeChannelSend(channel, {
-      embeds:     [buildScorecardEmbed(game)],
+      embeds: [buildScorecardEmbed(game)],
       components: _addCancelButton(buildNumberButtons(game.id, false), game.id),
     }).catch(() => {});
->>>>>>> 7369ed8 (after removing the guild glitches)
     return;
   }
 
@@ -1766,11 +1634,7 @@ async function _resolveBallResultOnChannel(channel, game, result) {
     flavor,
   );
 
-<<<<<<< HEAD
-  await channel.send({ embeds: [ballEmbed] }).catch(() => {});
-=======
   await safeChannelSend(channel, { embeds: [ballEmbed] }).catch(() => {});
->>>>>>> 7369ed8 (after removing the guild glitches)
 
   await _sleep(600);
 
@@ -1789,19 +1653,10 @@ async function _resolveBallResultOnChannel(channel, game, result) {
   }
 
   const scoreEmbed = buildScorecardEmbed(game);
-<<<<<<< HEAD
-  await channel
-    .send({
-      embeds: [scoreEmbed],
-      components: _addCancelButton(buildNumberButtons(game.id, false), game.id),
-    })
-    .catch(() => {});
-=======
   await safeChannelSend(channel, {
-    embeds:     [scoreEmbed],
+    embeds: [scoreEmbed],
     components: _addCancelButton(buildNumberButtons(game.id, false), game.id),
   }).catch(() => {});
->>>>>>> 7369ed8 (after removing the guild glitches)
 }
 
 async function _handleRematch(interaction, channelId, userId) {
@@ -1872,13 +1727,10 @@ function _resetTimeout(channelId, channel) {
     multiSessions.delete(channelId);
     recentWickets.delete(channelId);
     try {
-<<<<<<< HEAD
-      await channel.send(
+      await safeChannelSend(
+        channel,
         "⏰ **Game timed out** due to inactivity. Use `/handcricket` to start a new match!",
       );
-=======
-      await safeChannelSend(channel, '⏰ **Game timed out** due to inactivity. Use `/handcricket` to start a new match!');
->>>>>>> 7369ed8 (after removing the guild glitches)
     } catch (_) {}
   }, TIMEOUT_MS);
   timeouts.set(channelId, handle);
