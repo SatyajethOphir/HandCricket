@@ -139,3 +139,6 @@ process.on("uncaughtException", (err) =>
 
 // ── Login ────────────────────────────────────────────────────
 client.login(process.env.DISCORD_TOKEN);
+
+
+// testing purpose 
